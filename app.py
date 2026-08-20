@@ -183,6 +183,19 @@ def build_building_data(path, category_field="Can"):
     return buildings
 
 
+def build_legend_html():
+    """Vẽ Legend bằng HTML thuần, chèn NGAY DƯỚI bức ảnh bên trong cùng 1 iframe với
+    bản đồ (thay vì vẽ bằng Streamlit ở ngoài iframe). Nhờ vậy Legend luôn nằm sát
+    ảnh trên mọi kích thước màn hình, kể cả điện thoại, giống hệt trên máy tính."""
+    chips = "".join(
+        f'<span class="legend-chip">'
+        f'<span class="legend-swatch" style="background:{color};"></span>'
+        f'{cat}</span>'
+        for cat, color in CATEGORY_COLORS.items()
+    )
+    return f'<div id="legend">{chips}</div>'
+
+
 with open(IMAGE_PATH, "rb") as f:
     img_b64 = base64.b64encode(f.read()).decode()
 
@@ -246,16 +259,26 @@ HTML_TEMPLATE = """
   #tooltip .tt-body { padding:8px 12px; }
   #hint { position:absolute; right:10px; bottom:10px; color:rgba(255,255,255,0.55); font-size:12px; font-family: Arial, sans-serif; pointer-events:none;}
 
+  /* Chú thích màu (Legend) — nằm NGAY DƯỚI bức ảnh, trong cùng iframe với bản đồ,
+     nên trên điện thoại cũng hiển thị sát ảnh giống hệt trên máy tính. */
+  #legend {
+    margin-top:8px; padding:10px 14px; background:#f4f4f4; border-radius:8px;
+    font-family: Arial, sans-serif; font-size:13px; color:#333;
+  }
+  .legend-chip { display:inline-flex; align-items:center; gap:6px; margin:4px 16px 4px 0; }
+  .legend-swatch { width:14px; height:14px; border-radius:3px; display:inline-block; }
 
   /* Popup xem ảnh mặt bằng khi click vào 1 căn */
   #imgModal {
     position:absolute; inset:0; display:none; align-items:center; justify-content:center;
     background: rgba(0,0,0,0.75); z-index:50; padding:20px;
+    touch-action: pan-y;   /* cho phép cuộn dọc trong popup, không bị JS pan bản đồ chặn */
   }
   #imgModal.open { display:flex; }
   #imgModal .modal-card {
     background:#fff; border-radius:12px; max-width:92%; max-height:92%;
-    overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,0.5); font-family: Arial, sans-serif;
+    overflow:auto; -webkit-overflow-scrolling:touch; touch-action: pan-y;
+    box-shadow:0 12px 40px rgba(0,0,0,0.5); font-family: Arial, sans-serif;
   }
   #imgModal .modal-head {
     display:flex; align-items:center; justify-content:space-between; padding:10px 16px;
@@ -296,6 +319,8 @@ HTML_TEMPLATE = """
   </div>
   <div id="hint">Lăn chuột / chụm 2 ngón: zoom · Kéo: di chuyển</div>
 </div>
+
+__LEGEND_HTML__
 
 <script>
 (function () {
@@ -365,7 +390,7 @@ HTML_TEMPLATE = """
     });
     document.querySelectorAll('.zone-label').forEach(function (el) { el.style.display = ''; });
     buildingLayer.style.display = 'none';
-    statusText.textContent = '💡 Rê chuột để xem tên phân khu. Click vào bất kỳ đâu trong phân khu Palm River để zoom vào chi tiết.';
+    statusText.textContent = '💡 Click vào tên phân khu mà Bạn muốn xem để zoom vào xem chi tiết hơn.';
     backBtn.style.display = 'none';
   }
 
@@ -507,6 +532,7 @@ HTML_TEMPLATE = """
 
   // --- Bonus: lăn chuột để zoom, kéo để pan (tự viết, không cần thư viện ngoài) ---
   viewport.addEventListener('wheel', function (e) {
+    if (imgModal.classList.contains('open')) return;
     e.preventDefault();
     const rect = viewport.getBoundingClientRect();
     const mx = e.clientX - rect.left;
@@ -521,6 +547,7 @@ HTML_TEMPLATE = """
 
   let dragging = false, lastX = 0, lastY = 0;
   viewport.addEventListener('mousedown', function (e) {
+    if (imgModal.classList.contains('open')) return;
     dragging = true; lastX = e.clientX; lastY = e.clientY;
     viewport.classList.add('dragging');
   });
@@ -543,6 +570,7 @@ HTML_TEMPLATE = """
   }
 
   viewport.addEventListener('touchstart', function (e) {
+    if (imgModal.classList.contains('open')) { touchMode = null; return; }
     const rect = viewport.getBoundingClientRect();
     if (e.touches.length === 1) {
       touchMode = 'pan';
@@ -560,6 +588,7 @@ HTML_TEMPLATE = """
   }, { passive: true });
 
   viewport.addEventListener('touchmove', function (e) {
+    if (imgModal.classList.contains('open')) return;
     if (touchMode === 'pan' && e.touches.length === 1) {
       e.preventDefault();
       const t = e.touches[0];
@@ -591,10 +620,18 @@ HTML_TEMPLATE = """
 
   resetZoom();
 
-  // Báo chiều cao thực tế cho Streamlit qua postMessage (đúng cơ chế Streamlit hỗ trợ),
-  // thay vì tự set frameElement.style.height (dễ đo sai lúc layout chưa ổn định).
+  // Báo chiều cao thực tế cho iframe: gọi trực tiếp qua window.frameElement (iframe
+  // srcdoc của components.html không bị sandbox nên vẫn cùng-origin, truy cập được).
+  // Đây là cách ĐÁNG TIN CẬY để iframe tự co/giãn theo đúng nội dung thật (ảnh + Legend),
+  // khác với postMessage 'streamlit:setFrameHeight' vốn không được Streamlit lắng nghe
+  // đối với components.html thô — chỉ hoạt động cho custom component chính thức.
   function reportFrameHeight() {
     const h = document.documentElement.scrollHeight;
+    try {
+      if (window.frameElement) {
+        window.frameElement.style.height = h + 'px';
+      }
+    } catch (e) { /* bị chặn cross-origin (hiếm) -> vẫn thử postMessage bên dưới */ }
     window.parent.postMessage({ isStreamlitMessage: true, type: 'streamlit:setFrameHeight', height: h }, '*');
   }
   window.addEventListener('resize', reportFrameHeight);
@@ -615,31 +652,10 @@ html = (
     .replace("__IMG_B64__", img_b64)
     .replace("__ZONES_JSON__", json.dumps(zones_data, ensure_ascii=False))
     .replace("__BUILDINGS_JSON__", json.dumps(buildings_data, ensure_ascii=False))
+    .replace("__LEGEND_HTML__", build_legend_html())
 )
 
-# height ở đây chỉ là giá trị khởi tạo ban đầu; #viewport bên trong tự co giãn theo
-# aspect-ratio nên không còn dư khoảng trắng / phải cuộn để xem hết ảnh.
-components.html(html, height=950, scrolling=False)
-
-
-# ==========================================
-# CHÚ THÍCH MÀU (LEGEND) — vẽ bằng Streamlit trực tiếp (không qua iframe),
-# để luôn hiển thị đúng & không phụ thuộc việc iframe có tự co giãn hay không.
-# Luôn hiển thị (không ẩn/hiện theo zoom) vì không có kênh JS(iframe) -> Python.
-# ==========================================
-def render_legend():
-    chips = "".join(
-        f'<span style="display:inline-flex;align-items:center;gap:6px;margin:4px 16px 4px 0;">'
-        f'<span style="width:14px;height:14px;border-radius:3px;background:{color};display:inline-block;"></span>'
-        f'{cat}</span>'
-        for cat, color in CATEGORY_COLORS.items()
-    )
-    st.markdown(
-        '<div style="padding:10px 14px;background:#f4f4f4;border-radius:8px;'
-        'font-family:Arial, sans-serif;font-size:13px;color:#333;margin-top:8px;">'
-        + chips + "</div>",
-        unsafe_allow_html=True,
-    )
-
-
-render_legend()
+# height ở đây chỉ là giá trị khởi tạo ban đầu; #viewport + #legend bên trong tự co
+# giãn theo nội dung thật (Legend nằm ngay trong iframe, sát dưới ảnh) nên không còn
+# dư khoảng trắng / phải cuộn xa để thấy Legend, kể cả trên điện thoại.
+components.html(html, height=1080, scrolling=False)
