@@ -418,7 +418,7 @@ __LEGEND_HTML__
       buildingLayer.style.display = 'none';
     }
 
-    statusText.textContent = '📍 Đang xem chi tiết: ' + zone.name;
+    statusText.textContent = '📍 Đang xem chi tiết: ' + zone.name + '. Vui lòng click vào căn hộ muốn xem.';
     backBtn.style.display = 'inline-block';
   }
 
