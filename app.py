@@ -390,7 +390,7 @@ __LEGEND_HTML__
     });
     document.querySelectorAll('.zone-label').forEach(function (el) { el.style.display = ''; });
     buildingLayer.style.display = 'none';
-    statusText.textContent = '💡 Click vào tên phân khu mà Bạn muốn xem để zoom vào xem chi tiết hơn.';
+    statusText.textContent = '💡 Vui lòng Click vào tên phân khu mà Anh/Chị muốn xem để Zoom vào xem chi tiết hơn.';
     backBtn.style.display = 'none';
   }
 
