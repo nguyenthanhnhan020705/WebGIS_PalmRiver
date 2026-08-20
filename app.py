@@ -210,6 +210,7 @@ HTML_TEMPLATE = """
     margin: 0 auto;
     overflow: hidden;
     background: #000; border-radius: 10px; cursor: grab;
+    touch-action: none;   /* để JS tự xử lý pinch-zoom / kéo bằng ngón tay trên điện thoại */
   }
   #viewport.dragging { cursor: grabbing; }
   #stage { position: absolute; top:0; left:0; transform-origin: 0 0; width: 100%; height: 100%; }
@@ -243,14 +244,8 @@ HTML_TEMPLATE = """
     padding:6px 12px; font-weight:800; font-size:13px; color:#111;
   }
   #tooltip .tt-body { padding:8px 12px; }
-  #legend {
-    position:absolute; left:10px; bottom:10px; display:none;
-    background: rgba(20,20,20,0.75); border-radius:8px; padding:8px 12px;
-    font-family: Arial, sans-serif; font-size:12px; color:white; line-height:1.7;
-  }
-  #legend .legend-item { display:flex; align-items:center; gap:6px; }
-  #legend .legend-swatch { width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
   #hint { position:absolute; right:10px; bottom:10px; color:rgba(255,255,255,0.55); font-size:12px; font-family: Arial, sans-serif; pointer-events:none;}
+
 
   /* Popup xem ảnh mặt bằng khi click vào 1 căn */
   #imgModal {
@@ -287,7 +282,6 @@ HTML_TEMPLATE = """
     </svg>
   </div>
   <div id="tooltip"></div>
-  <div id="legend"></div>
   <div id="imgModal">
     <div class="modal-card">
       <div class="modal-head">
@@ -300,7 +294,7 @@ HTML_TEMPLATE = """
       </div>
     </div>
   </div>
-  <div id="hint">Lăn chuột: zoom · Kéo: di chuyển</div>
+  <div id="hint">Lăn chuột / chụm 2 ngón: zoom · Kéo: di chuyển</div>
 </div>
 
 <script>
@@ -316,7 +310,6 @@ HTML_TEMPLATE = """
   const zoneLayer = document.getElementById('zoneLayer');
   const buildingLayer = document.getElementById('buildingLayer');
   const tooltip = document.getElementById('tooltip');
-  const legend = document.getElementById('legend');
   const statusText = document.getElementById('statusText');
   const backBtn = document.getElementById('backBtn');
   const imgModal = document.getElementById('imgModal');
@@ -372,7 +365,6 @@ HTML_TEMPLATE = """
     });
     document.querySelectorAll('.zone-label').forEach(function (el) { el.style.display = ''; });
     buildingLayer.style.display = 'none';
-    legend.style.display = 'none';
     statusText.textContent = '💡 Rê chuột để xem tên phân khu. Click vào bất kỳ đâu trong phân khu Palm River để zoom vào chi tiết.';
     backBtn.style.display = 'none';
   }
@@ -397,10 +389,8 @@ HTML_TEMPLATE = """
 
     if (zone.name.toUpperCase().indexOf('PALM RIVER') !== -1) {
       buildingLayer.style.display = 'block';
-      legend.style.display = 'block';
     } else {
       buildingLayer.style.display = 'none';
-      legend.style.display = 'none';
     }
 
     statusText.textContent = '📍 Đang xem chi tiết: ' + zone.name;
@@ -487,7 +477,6 @@ HTML_TEMPLATE = """
   imgModal.addEventListener('click', function (e) { if (e.target === imgModal) closeBuildingModal(); });
 
   // --- Vẽ các căn hộ (ẩn sẵn, chỉ hiện khi zoom vào Palm River), tô màu theo loại căn ---
-  const seenCategories = {}; // dùng để dựng legend không trùng lặp, giữ thứ tự xuất hiện
   buildings.forEach(function (b) {
     const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polygon');
     poly.setAttribute('points', b.points);
@@ -499,17 +488,7 @@ HTML_TEMPLATE = """
     poly.addEventListener('mouseleave', hideTooltip);
     poly.addEventListener('click', function (e) { e.stopPropagation(); openBuildingModal(b); });
     buildingLayer.appendChild(poly);
-
-    if (b.category && !seenCategories[b.category]) {
-      seenCategories[b.category] = b.color;
-    }
   });
-
-  // Dựng chú thích màu (legend) từ các loại căn thực có trong dữ liệu
-  const legendHtml = Object.keys(seenCategories).map(function (cat) {
-    return '<div class="legend-item"><span class="legend-swatch" style="background:' + seenCategories[cat] + '"></span>' + escapeHtml(cat) + '</div>';
-  }).join('');
-  legend.innerHTML = legendHtml;
 
   function showTooltip(html, e) {
     tooltip.style.borderLeft = 'none';
@@ -554,6 +533,62 @@ HTML_TEMPLATE = """
     applyTransform(false);
   });
 
+  // --- Cảm ứng trên điện thoại: 1 ngón để kéo (pan), 2 ngón để phóng to/thu nhỏ (pinch-zoom) ---
+  let touchMode = null; // 'pan' | 'pinch'
+  let touchLastX = 0, touchLastY = 0;
+  let pinchStartDist = 0, pinchStartScale = 1, pinchMidX = 0, pinchMidY = 0, pinchStartTx = 0, pinchStartTy = 0;
+
+  function touchDist(t1, t2) {
+    return Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+  }
+
+  viewport.addEventListener('touchstart', function (e) {
+    const rect = viewport.getBoundingClientRect();
+    if (e.touches.length === 1) {
+      touchMode = 'pan';
+      touchLastX = e.touches[0].clientX;
+      touchLastY = e.touches[0].clientY;
+    } else if (e.touches.length === 2) {
+      touchMode = 'pinch';
+      pinchStartDist = touchDist(e.touches[0], e.touches[1]);
+      pinchStartScale = scale;
+      pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+      pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+      pinchStartTx = tx;
+      pinchStartTy = ty;
+    }
+  }, { passive: true });
+
+  viewport.addEventListener('touchmove', function (e) {
+    if (touchMode === 'pan' && e.touches.length === 1) {
+      e.preventDefault();
+      const t = e.touches[0];
+      tx += (t.clientX - touchLastX);
+      ty += (t.clientY - touchLastY);
+      touchLastX = t.clientX; touchLastY = t.clientY;
+      applyTransform(false);
+    } else if (touchMode === 'pinch' && e.touches.length === 2) {
+      e.preventDefault();
+      const dist = touchDist(e.touches[0], e.touches[1]);
+      const newScale = Math.min(Math.max(pinchStartScale * (dist / pinchStartDist), 1), 10);
+      tx = pinchMidX - (pinchMidX - pinchStartTx) * (newScale / pinchStartScale);
+      ty = pinchMidY - (pinchMidY - pinchStartTy) * (newScale / pinchStartScale);
+      scale = newScale;
+      applyTransform(false);
+    }
+  }, { passive: false });
+
+  viewport.addEventListener('touchend', function (e) {
+    if (e.touches.length === 1) {
+      // vừa buông bớt 1 ngón sau khi pinch -> chuyển tiếp sang pan bằng ngón còn lại
+      touchMode = 'pan';
+      touchLastX = e.touches[0].clientX;
+      touchLastY = e.touches[0].clientY;
+    } else if (e.touches.length === 0) {
+      touchMode = null;
+    }
+  });
+
   resetZoom();
 
   // Báo chiều cao thực tế cho Streamlit qua postMessage (đúng cơ chế Streamlit hỗ trợ),
@@ -585,3 +620,26 @@ html = (
 # height ở đây chỉ là giá trị khởi tạo ban đầu; #viewport bên trong tự co giãn theo
 # aspect-ratio nên không còn dư khoảng trắng / phải cuộn để xem hết ảnh.
 components.html(html, height=950, scrolling=False)
+
+
+# ==========================================
+# CHÚ THÍCH MÀU (LEGEND) — vẽ bằng Streamlit trực tiếp (không qua iframe),
+# để luôn hiển thị đúng & không phụ thuộc việc iframe có tự co giãn hay không.
+# Luôn hiển thị (không ẩn/hiện theo zoom) vì không có kênh JS(iframe) -> Python.
+# ==========================================
+def render_legend():
+    chips = "".join(
+        f'<span style="display:inline-flex;align-items:center;gap:6px;margin:4px 16px 4px 0;">'
+        f'<span style="width:14px;height:14px;border-radius:3px;background:{color};display:inline-block;"></span>'
+        f'{cat}</span>'
+        for cat, color in CATEGORY_COLORS.items()
+    )
+    st.markdown(
+        '<div style="padding:10px 14px;background:#f4f4f4;border-radius:8px;'
+        'font-family:Arial, sans-serif;font-size:13px;color:#333;margin-top:8px;">'
+        + chips + "</div>",
+        unsafe_allow_html=True,
+    )
+
+
+render_legend()
