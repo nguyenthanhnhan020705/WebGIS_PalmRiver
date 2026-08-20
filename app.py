@@ -2,6 +2,7 @@ import streamlit as st
 import streamlit.components.v1 as components
 import json
 import base64
+import os
 
 st.set_page_config(layout="wide", page_title="WebGIS Palm River")
 st.title("🗺️ WebGIS Dự án Palm City")
@@ -112,6 +113,7 @@ def build_zone_data(path, name_field="Ten_Khu"):
 # Bảng màu theo loại căn — chỉnh sửa/thêm dòng tại đây nếu có thêm loại mới
 CATEGORY_COLORS = {
     "2PN": "#f5a623",
+    "2PN GÓC": "#c4c752",
     "2PN ĐẶC BIỆT": "#c0392b",
     "3PN": "#2ecc71",
     "3PN ĐẶC BIỆT": "#2980b9",
@@ -119,11 +121,42 @@ CATEGORY_COLORS = {
 }
 DEFAULT_COLOR = "#00bcd4"
 
+# Ảnh mặt bằng theo loại căn — tất cả các căn CÙNG loại dùng chung 1 ảnh mặt bằng.
+# Nếu muốn mỗi căn có ảnh riêng, thêm 1 cột (VD "MatBang") trong QGIS rồi đổi
+# build_building_data bên dưới sang đọc theo cột đó thay vì theo "category".
+MATBANG_DIR = "data/matbang"
+CATEGORY_IMAGES = {
+    "2PN": "2pn.jpg",
+    "2PN GÓC": "2pn_goc.jpg",
+    "2PN ĐẶC BIỆT": "2pn_dacbiet.jpg",
+    "3PN": "3pn.jpg",
+    "3PN ĐẶC BIỆT": "3pn_dacbiet.jpg",
+}
+_image_b64_cache = {}
+
+
+def load_image_b64(filename):
+    if not filename:
+        return None
+    if filename in _image_b64_cache:
+        return _image_b64_cache[filename]
+    path = os.path.join(MATBANG_DIR, filename)
+    if not os.path.exists(path):
+        _image_b64_cache[filename] = None
+        return None
+    with open(path, "rb") as f:
+        b64 = base64.b64encode(f.read()).decode()
+    ext = filename.rsplit(".", 1)[-1].lower()
+    mime = "image/png" if ext == "png" else "image/jpeg"
+    data_uri = f"data:{mime};base64,{b64}"
+    _image_b64_cache[filename] = data_uri
+    return data_uri
+
 
 def build_building_data(path, category_field="Can"):
     """Lấy TOÀN BỘ thuộc tính (properties) đã điền trong QGIS cho mỗi polygon căn,
     để hiển thị đầy đủ khi rê chuột — không giới hạn ở 2 trường Can/Loai_Can nữa.
-    Đồng thời gán màu theo loại căn (CATEGORY_COLORS) để tô polygon."""
+    Đồng thời gán màu + ảnh mặt bằng theo loại căn."""
     geo = load_geojson(path)
     buildings = []
     for feature in geo["features"]:
@@ -139,10 +172,12 @@ def build_building_data(path, category_field="Can"):
         }
         category = str(props.get(category_field, "")).strip()
         color = CATEGORY_COLORS.get(category, DEFAULT_COLOR)
+        image = load_image_b64(CATEGORY_IMAGES.get(category))
         buildings.append({
             "props": clean_props,
             "category": category,
             "color": color,
+            "image": image,
             "points": " ".join(f"{x:.1f},{y:.1f}" for x, y in pts),
         })
     return buildings
@@ -216,6 +251,28 @@ HTML_TEMPLATE = """
   #legend .legend-item { display:flex; align-items:center; gap:6px; }
   #legend .legend-swatch { width:12px; height:12px; border-radius:3px; flex:0 0 auto; }
   #hint { position:absolute; right:10px; bottom:10px; color:rgba(255,255,255,0.55); font-size:12px; font-family: Arial, sans-serif; pointer-events:none;}
+
+  /* Popup xem ảnh mặt bằng khi click vào 1 căn */
+  #imgModal {
+    position:absolute; inset:0; display:none; align-items:center; justify-content:center;
+    background: rgba(0,0,0,0.75); z-index:50; padding:20px;
+  }
+  #imgModal.open { display:flex; }
+  #imgModal .modal-card {
+    background:#fff; border-radius:12px; max-width:92%; max-height:92%;
+    overflow:auto; box-shadow:0 12px 40px rgba(0,0,0,0.5); font-family: Arial, sans-serif;
+  }
+  #imgModal .modal-head {
+    display:flex; align-items:center; justify-content:space-between; padding:10px 16px;
+  }
+  #imgModal .modal-title { font-weight:800; font-size:15px; }
+  #imgModal .modal-close {
+    cursor:pointer; border:none; background:#eee; width:28px; height:28px; border-radius:50%;
+    font-size:16px; line-height:1; color:#333;
+  }
+  #imgModal .modal-body { padding: 0 16px 16px; }
+  #imgModal img { display:block; max-width:100%; max-height:65vh; margin:0 auto; border-radius:6px; }
+  #imgModal .modal-props { margin-top:10px; font-size:13px; color:#333; line-height:1.6; }
 </style>
 
 <div id="statusText">💡 Rê chuột để xem tên phân khu. Click vào bất kỳ đâu trong phân khu Palm River để zoom vào chi tiết.</div>
@@ -231,6 +288,18 @@ HTML_TEMPLATE = """
   </div>
   <div id="tooltip"></div>
   <div id="legend"></div>
+  <div id="imgModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <div class="modal-title" id="modalTitle"></div>
+        <button class="modal-close" id="modalClose">✕</button>
+      </div>
+      <div class="modal-body">
+        <img id="modalImg" src="" alt="Mặt bằng" />
+        <div class="modal-props" id="modalProps"></div>
+      </div>
+    </div>
+  </div>
   <div id="hint">Lăn chuột: zoom · Kéo: di chuyển</div>
 </div>
 
@@ -250,6 +319,11 @@ HTML_TEMPLATE = """
   const legend = document.getElementById('legend');
   const statusText = document.getElementById('statusText');
   const backBtn = document.getElementById('backBtn');
+  const imgModal = document.getElementById('imgModal');
+  const modalTitle = document.getElementById('modalTitle');
+  const modalImg = document.getElementById('modalImg');
+  const modalProps = document.getElementById('modalProps');
+  const modalClose = document.getElementById('modalClose');
 
   let scale = 1, tx = 0, ty = 0;
   let currentZoom = null;
@@ -395,6 +469,23 @@ HTML_TEMPLATE = """
     moveTooltip(e);
   }
 
+  // Mở popup xem ảnh mặt bằng khi click vào 1 căn (nếu có ảnh cho loại căn đó)
+  function openBuildingModal(b) {
+    if (!b.image) return; // chưa có ảnh mặt bằng cho loại căn này
+    modalTitle.textContent = b.category || 'Mặt bằng';
+    modalTitle.style.color = b.color;
+    modalImg.src = b.image;
+    const props = b.props || {};
+    const keys = Object.keys(props).filter(function (k) { return k !== 'Can'; });
+    modalProps.innerHTML = keys.map(function (k) {
+      return '<b>' + escapeHtml(k) + ':</b> ' + escapeHtml(props[k]);
+    }).join('<br>');
+    imgModal.classList.add('open');
+  }
+  function closeBuildingModal() { imgModal.classList.remove('open'); }
+  modalClose.addEventListener('click', closeBuildingModal);
+  imgModal.addEventListener('click', function (e) { if (e.target === imgModal) closeBuildingModal(); });
+
   // --- Vẽ các căn hộ (ẩn sẵn, chỉ hiện khi zoom vào Palm River), tô màu theo loại căn ---
   const seenCategories = {}; // dùng để dựng legend không trùng lặp, giữ thứ tự xuất hiện
   buildings.forEach(function (b) {
@@ -402,9 +493,11 @@ HTML_TEMPLATE = """
     poly.setAttribute('points', b.points);
     poly.setAttribute('class', 'building-poly');
     poly.style.fill = b.color;
+    if (b.image) poly.style.cursor = 'zoom-in';
     poly.addEventListener('mouseenter', function (e) { showBuildingTooltip(b, e); });
     poly.addEventListener('mousemove', moveTooltip);
     poly.addEventListener('mouseleave', hideTooltip);
+    poly.addEventListener('click', function (e) { e.stopPropagation(); openBuildingModal(b); });
     buildingLayer.appendChild(poly);
 
     if (b.category && !seenCategories[b.category]) {
